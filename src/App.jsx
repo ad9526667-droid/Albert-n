@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Dexie from 'dexie';
 
-// FIX ECRAN NOIR WORKER - IndexedDB n'existe pas sur workers.dev
 let db = null;
 try {
   if (typeof indexedDB!== 'undefined') {
@@ -12,18 +11,16 @@ try {
       projects: '++id, chatId, files'
     });
   }
-} catch (e) {
-  db = null;
-}
+} catch (e) { db = null; }
 
 export default function App() {
   const [conversations, setConversations] = useState([]);
   const [currentChatId, setCurrentChatId] = useState(1);
-  const [messages, setMessages] = useState([{ role: 'assistant', content: "**Salut, c'est Ali.** Prêt à builder. Décris ton app, j'active terminal, files, preview, voix Edge et rire humain.", timestamp: Date.now() }]);
+  const [messages, setMessages] = useState([{ role: 'assistant', content: "**Salut, c'est Ali.** Prêt à builder. Images, vidéos, musiques téléchargeables + vision 👁️", timestamp: Date.now() }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [activeView, setActiveView] = useState('chat');
-  const [projectFiles, setProjectFiles] = useState([{ path: 'src/App.jsx', content: `export default function App(){ return <div className="min-h-screen bg-black text-white grid place-items-center p-10"><h1 className="text-4xl font-black">Ali OS prêt - V9 FIXED</h1><p>Décris ton app</p></div> }` }]);
+  const [projectFiles, setProjectFiles] = useState([{ path: 'src/App.jsx', content: `export default function App(){ return <div className="min-h-screen bg-black text-white grid place-items-center p-10"><h1 className="text-4xl font-black">Ali OS prêt</h1></div> }` }]);
   const [activeFile, setActiveFile] = useState('src/App.jsx');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [voices, setVoices] = useState([]);
@@ -31,8 +28,8 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const [visionImage, setVisionImage] = useState(null);
 
-  // TTS EDGE SECURED
   useEffect(() => {
     if (typeof window === 'undefined' ||!window.speechSynthesis) return;
     const load = () => {
@@ -50,7 +47,7 @@ export default function App() {
     try {
       if (typeof window === 'undefined' ||!window.speechSynthesis) return;
       window.speechSynthesis.cancel();
-      let clean = t.replace(/\*\*/g, '').replace(/IMG::.*/, '').slice(0, 350);
+      let clean = t.replace(/\*\*/g, '').replace(/(IMG|VIDEO|AUDIO|VISION)::.*/g, '').slice(0, 350);
       if (laugh) clean += " Hahaha!";
       const u = new SpeechSynthesisUtterance(clean);
       if (selectedVoice) u.voice = selectedVoice;
@@ -60,7 +57,24 @@ export default function App() {
   };
   const doLaugh = () => speak("Ahahah c'est trop drôle, j'adore!", true);
 
-  // LOAD DB SAFE
+  // DOWNLOAD FUNCTION - TELECHARGEABLE
+  const downloadFile = async (url, filename) => {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename || `ali-${Date.now()}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(()=> URL.revokeObjectURL(blobUrl), 2000);
+    } catch {
+      window.open(url, '_blank');
+    }
+  };
+
   useEffect(() => {
     (async () => {
       if (!db) return;
@@ -68,7 +82,7 @@ export default function App() {
         let chats = await db.conversations.toArray();
         if (!chats.length) {
           const id = await db.conversations.add({ title: 'Nouvelle app', updatedAt: Date.now() });
-          await db.messages.add({ chatId: id, role: 'assistant', content: "**Salut, c'est Ali.** Prêt à builder.", timestamp: Date.now() });
+          await db.messages.add({ chatId: id, role: 'assistant', content: "**Salut, c'est Ali.**", timestamp: Date.now() });
           chats = [{ id, title: 'Nouvelle app', updatedAt: Date.now() }];
         }
         setConversations(chats.sort((a, b) => b.updatedAt - a.updatedAt));
@@ -78,7 +92,6 @@ export default function App() {
       } catch {}
     })();
   }, []);
-
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   const startMic = () => {
@@ -90,6 +103,45 @@ export default function App() {
     r.start();
   };
 
+  const handleFile = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const dataUrl = ev.target.result;
+        setVisionImage(dataUrl);
+        const um = { role: 'user', content: `VISION::${dataUrl}`, timestamp: Date.now(), id: Date.now() };
+        setMessages(m => [...m, um]);
+        if (db) try { await db.messages.add({ chatId: currentChatId, role: 'user', content: `VISION::${dataUrl}`, timestamp: Date.now() }); } catch {}
+        setLoading(true);
+        try {
+          const res = await fetch('https://text.pollinations.ai/openai', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'openai',
+              messages: [{ role: 'user', content: [{ type: 'text', text: 'Analyse cette image en français détaillé.' }, { type: 'image_url', image_url: { url: dataUrl } }] }]
+            })
+          });
+          const j = await res.json();
+          const answer = j.choices?.[0]?.message?.content || "Image reçue!";
+          const am = { role: 'assistant', content: answer, timestamp: Date.now(), id: Date.now()+1 };
+          setMessages(m => [...m, am]);
+          speak(answer);
+        } catch {
+          const am = { role: 'assistant', content: "**Image reçue!** Vision active 👁️", timestamp: Date.now(), id: Date.now()+1 };
+          setMessages(m => [...m, am]);
+        } finally { setLoading(false); }
+      };
+      reader.readAsDataURL(f);
+    } else {
+      const t = await f.text();
+      setProjectFiles(p => [...p, { path: `src/${f.name}`, content: t }]);
+      setActiveFile(`src/${f.name}`);
+    }
+    e.target.value = '';
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault(); if (!input.trim() || loading) return;
     const prompt = input.trim(); setInput('');
@@ -98,56 +150,97 @@ export default function App() {
     if (db) try { await db.messages.add({ chatId: currentChatId, role: 'user', content: prompt, timestamp: Date.now() }); } catch {}
     setLoading(true);
 
-    // IMAGE DIRECT - pas de LLM = pas de fuite
-    if (/image|chien|dog|photo|génère|dessine|picture/i.test(prompt)) {
-      const imgUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&seed=${Date.now()}`;
-      const am = { role: 'assistant', content: `IMG::${imgUrl}`, timestamp: Date.now(), id: Date.now() + 1 };
+    const lower = prompt.toLowerCase();
+    const isVideo = /vidéo|video|clip|film/i.test(lower);
+    const isMusic = /musique|music|son|audio|beat|chanson/i.test(lower);
+    const isImage = /image|photo|génère|dessine|chien|dog|picture/i.test(lower);
+
+    if (isImage || isVideo || isMusic) {
+      let mediaUrl = ""; let type = "";
+      if (isVideo) {
+        mediaUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?model=video&width=1280&height=720&seed=${Date.now()}&nologo=true`;
+        type = "VIDEO";
+      } else if (isMusic) {
+        mediaUrl = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?model=openai-audio&voice=alloy`;
+        type = "AUDIO";
+      } else {
+        mediaUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&seed=${Date.now()}&nologo=true&enhance=true`;
+        type = "IMAGE";
+      }
+      const am = { role: 'assistant', content: `${type}::${mediaUrl}::${prompt}`, timestamp: Date.now(), id: Date.now()+1 };
       setMessages(m => [...m, am]);
-      if (db) try { await db.messages.add({ chatId: currentChatId, role: 'assistant', content: `IMG::${imgUrl}`, timestamp: Date.now() }); } catch {}
-      speak("Voilà ton image");
+      if (db) try { await db.messages.add({ chatId: currentChatId, role: 'assistant', content: `${type}::${mediaUrl}::${prompt}`, timestamp: Date.now() }); } catch {}
+      speak(type==="IMAGE"? "Image générée!" : type==="VIDEO"? "Vidéo générée!" : "Musique générée!");
       setLoading(false); return;
     }
 
     try {
-      const sys = `Tu es Ali OS. Si CODE demandé, réponds UNIQUEMENT JSON {"files":[{"path":"src/App.jsx","content":"code React"}]}. Sinon français court sans JSON.`;
-      const res = await fetch(`https://text.pollinations.ai/${encodeURIComponent(sys + " User:" + prompt)}?model=openai`);
+      let url = `https://text.pollinations.ai/${encodeURIComponent(`Tu es Ali OS. Si CODE demandé, réponds UNIQUEMENT JSON {"files":[{"path":"src/App.jsx","content":"code React"}]}. Sinon français court. User: ${prompt}`)}?model=openai`;
+      let res;
+      if (visionImage) {
+        res = await fetch('https://text.pollinations.ai/openai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'openai',
+            messages: [{ role: 'system', content: 'Tu es Ali OS.' }, { role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: visionImage } }] }]
+          })
+        });
+        const j = await res.json();
+        const raw = j.choices?.[0]?.message?.content || "";
+        throw { rawVision: raw };
+      } else {
+        res = await fetch(url);
+      }
       const raw = await res.text();
-
       let files = null;
       try {
         const m = raw.match(/\{"files"\s*:\s*\[[\s\S]*?\]\}/);
-        if (m) {
-          const p = JSON.parse(m[0].replace(/```json|```/g, ''));
-          if (p.files?.length) files = p.files;
-        }
+        if (m) { const p = JSON.parse(m[0].replace(/```json|```/g, '')); if (p.files?.length) files = p.files; }
       } catch {}
-
       if (files) {
         const safe = files.filter(f => f.path && f.content &&!f.path.includes('..') && f.path.length < 100).slice(0, 12);
         setProjectFiles(safe); setActiveFile(safe[0].path);
-        if (db) {
-          try { await db.projects.where('chatId').equals(currentChatId).delete(); await db.projects.add({ chatId: currentChatId, files: safe }); } catch {}
-        }
-        const am = { role: 'assistant', content: `**✅ ${safe.length} fichiers créés.** Preview prêt.`, timestamp: Date.now(), id: Date.now() + 1 };
+        if (db) { try { await db.projects.where('chatId').equals(currentChatId).delete(); await db.projects.add({ chatId: currentChatId, files: safe }); } catch {} }
+        const am = { role: 'assistant', content: `**✅ ${safe.length} fichiers créés.** Preview prêt.`, timestamp: Date.now(), id: Date.now()+1 };
         setMessages(m => [...m, am]);
         setActiveView('preview');
-        speak(`Projet créé, ${safe.length} fichiers`, true);
+        speak(`Projet créé`, true);
       } else {
-        // NETTOYAGE TOTAL ANTI-FUITE
-        let clean = raw.replace(/\{[\s\S]*"tool_calls"[\s\S]*\}/g, '').replace(/<!DOCTYPE[\s\S]*?>/g, '').replace(/<meta[\s\S]*?>/g, '').replace(/framer-motion[\s\S]*$/g, '').replace(/src\/App\.jsx[\s\S]*$/g, '').replace(/\{"role"[\s\S]*$/g, '').trim();
+        let clean = raw.replace(/\{[\s\S]*"tool_calls"[\s\S]*\}/g, '').replace(/<!DOCTYPE[\s\S]*?>/g, '').replace(/<meta[\s\S]*?>/g, '').trim();
         if (clean.length > 500) clean = clean.slice(0, 500);
-        if (!clean) clean = "Salut! Comment ça va? 👋";
-        const am = { role: 'assistant', content: clean, timestamp: Date.now(), id: Date.now() + 1 };
+        if (!clean) clean = "Salut! 👋";
+        const am = { role: 'assistant', content: clean, timestamp: Date.now(), id: Date.now()+1 };
         setMessages(m => [...m, am]);
-        if (db) try { await db.messages.add({ chatId: currentChatId, role: 'assistant', content: clean, timestamp: Date.now() }); } catch {}
         speak(clean);
       }
-    } catch {
-      setMessages(m => [...m, { role: 'assistant', content: "Erreur réseau, réessaie.", timestamp: Date.now(), id: Date.now() + 1 }]);
+    } catch (err) {
+      if (err.rawVision) {
+        const am = { role: 'assistant', content: err.rawVision, timestamp: Date.now(), id: Date.now()+1 };
+        setMessages(m => [...m, am]);
+        speak(err.rawVision);
+      } else {
+        setMessages(m => [...m, { role: 'assistant', content: "Erreur réseau", timestamp: Date.now(), id: Date.now()+1 }]);
+      }
     } finally { setLoading(false); }
   };
 
   const previewDoc = `<!DOCTYPE html><html><head><script src="https://cdn.tailwindcss.com"><\/script><script src="https://unpkg.com/react@18/umd/react.development.js"><\/script><script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script><script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script></head><body><div id="root"></div><script type="text/babel">${projectFiles.map(f => f.content).join('\n')}\nconst root=ReactDOM.createRoot(document.getElementById('root')); try{root.render(React.createElement(App))}catch(e){document.body.innerHTML='<pre style=color:red;padding:20px>'+e.message+'</pre>'}\<\/script></body></html>`;
+
+  const renderMessage = (m) => {
+    const c = m.content || "";
+    if (c.startsWith('VISION::')) {
+      const url = c.replace('VISION::','');
+      return <div style={{ display:'flex', flexDirection:'column', gap:6 }}><img src={url} style={{ maxWidth: 320, borderRadius: 18, border: '1px solid #222' }} /><div style={{ display:'flex', gap:6 }}><button onClick={()=>downloadFile(url, `vision-${Date.now()}.jpg`)} style={{ background:'#1A1A1E', border:'1px solid #222', color:'#CCFF00', borderRadius:20, padding:'4px 10px', fontSize:11, cursor:'pointer' }}>⬇️ Télécharger</button><span style={{ fontSize: 11, color: '#666' }}>Vision 👁️</span></div></div>;
+    }
+    if (c.startsWith('IMAGE::') || c.startsWith('VIDEO::') || c.startsWith('AUDIO::')) {
+      const parts = c.split('::'); const t = parts[0]; const url = parts[1]; const p = parts[2]||'';
+      if (t==="IMAGE") return <div style={{ display:'flex', flexDirection:'column', gap:8 }}><img src={url} referrerPolicy="no-referrer" style={{ maxWidth: 320, width:'100%', borderRadius: 18, border: '1px solid #222', background:'#111' }} /><div style={{ display:'flex', gap:6, flexWrap:'wrap' }}><button onClick={()=>downloadFile(url, `image-${Date.now()}.jpg`)} style={{ background:'#CCFF00', color:'#000', border:'none', borderRadius:20, padding:'6px 12px', fontSize:11, fontWeight:800, cursor:'pointer' }}>⬇️ Télécharger JPG</button><button onClick={()=>window.open(url,'_blank')} style={{ background:'#1A1A1E', border:'1px solid #222', color:'#fff', borderRadius:20, padding:'6px 12px', fontSize:11, cursor:'pointer' }}>Ouvrir HD</button></div><div style={{ fontSize: 10, color:'#555' }}>{p.slice(0,50)}</div></div>;
+      if (t==="VIDEO") return <div style={{ display:'flex', flexDirection:'column', gap:8 }}><video src={url} controls style={{ maxWidth: 320, borderRadius: 18, border: '1px solid #222' }} /><button onClick={()=>downloadFile(url, `video-${Date.now()}.mp4`)} style={{ background:'#CCFF00', color:'#000', border:'none', borderRadius:20, padding:'6px 12px', fontSize:11, fontWeight:800, cursor:'pointer', width:'fit-content' }}>⬇️ Télécharger MP4</button></div>;
+      if (t==="AUDIO") return <div style={{ background:'#121214', border:'1px solid #232326', borderRadius:16, padding:12, minWidth:280 }}><div style={{ fontSize:12, fontWeight:700, marginBottom:8 }}>🎵 {p.slice(0,40)}</div><audio controls style={{ width:'100%' }}><source src={url} type="audio/mpeg" /></audio><button onClick={()=>downloadFile(url, `audio-${Date.now()}.mp3`)} style={{ marginTop:8, background:'#CCFF00', color:'#000', border:'none', borderRadius:20, padding:'6px 12px', fontSize:11, fontWeight:800, cursor:'pointer' }}>⬇️ Télécharger MP3</button></div>;
+    }
+    return <div style={{ background: m.role === 'user'? '#1A1A1E' : 'transparent', padding: m.role === 'user'? '12px 16px' : '0', borderRadius: m.role === 'user'? '18px 18px 4px 18px' : '0', fontSize: 15, lineHeight: 1.6, border: m.role === 'user'? '1px solid #232326' : 'none', wordBreak: 'break-word' }}>{c.replace(/\*\*/g, '')}</div>;
+  };
 
   return (
     <div style={{ height: '100dvh', background: '#07070A', color: '#fff', display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: 'Inter, system-ui' }}>
@@ -168,8 +261,8 @@ export default function App() {
             <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 14px', display: 'flex', flexDirection: 'column', gap: 20 }}>
               {messages.map((m, i) => (
                 <div key={m.id || i} style={{ alignSelf: m.role === 'user'? 'flex-end' : 'flex-start', maxWidth: m.role === 'user'? '80%' : '100%', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                  {m.content.startsWith('IMG::')? <div><img src={m.content.replace('IMG::', '')} style={{ maxWidth: 320, borderRadius: 18, border: '1px solid #222' }} /><div style={{ marginTop: 8, fontSize: 13, fontWeight: 700 }}>Image générée 🐶</div></div> : <div style={{ background: m.role === 'user'? '#1A1A1E' : 'transparent', padding: m.role === 'user'? '12px 16px' : '0', borderRadius: m.role === 'user'? '18px 18px 4px 18px' : '0', fontSize: 15, lineHeight: 1.6, border: m.role === 'user'? '1px solid #232326' : 'none', wordBreak: 'break-word' }}>{m.content.replace(/\*\*/g, '')}</div>}
-                  {m.role === 'assistant' &&!m.content.startsWith('IMG::') && <><button onClick={() => speak(m.content)} style={{ width: 28, height: 28, borderRadius: 99, background: '#151519', border: '1px solid #222', flexShrink: 0 }}>🔊</button><button onClick={doLaugh} style={{ width: 28, height: 28, borderRadius: 99, background: '#151519', border: '1px solid #222', flexShrink: 0 }}>😂</button></>}
+                  {renderMessage(m)}
+                  {m.role === 'assistant' &&!m.content.startsWith('IMAGE::') &&!m.content.startsWith('VIDEO::') &&!m.content.startsWith('AUDIO::') &&!m.content.startsWith('VISION::') && <><button onClick={() => speak(m.content)} style={{ width: 28, height: 28, borderRadius: 99, background: '#151519', border: '1px solid #222', flexShrink: 0 }}>🔊</button><button onClick={doLaugh} style={{ width: 28, height: 28, borderRadius: 99, background: '#151519', border: '1px solid #222', flexShrink: 0 }}>😂</button></>}
                 </div>
               ))}
               {loading && <div style={{ color: '#CCFF00', fontSize: 13, fontWeight: 700 }}>Ali réfléchit...</div>}
@@ -180,7 +273,7 @@ export default function App() {
           <div style={{ padding: '10px 12px 14px', borderTop: '1px solid #111', flexShrink: 0, background: '#08080A' }}>
             <form onSubmit={handleSubmit} style={{ maxWidth: 680, margin: '0 auto', display: 'flex', gap: 8, background: '#121214', borderRadius: 28, padding: '6px 8px 6px 14px', border: '1px solid #232326', alignItems: 'center' }}>
               <button type="button" onClick={() => fileInputRef.current.click()} style={{ width: 34, height: 34, borderRadius: '50%', background: '#1E1E22', border: '1px solid #2A2A2E', color: '#fff', cursor: 'pointer' }}>📎</button>
-              <input ref={fileInputRef} type="file" hidden onChange={async (e) => { const f = e.target.files[0]; if (f) { const t = await f.text(); setProjectFiles(p => [...p, { path: `src/${f.name}`, content: t }]); setActiveFile(`src/${f.name}`); setActiveView('chat'); } }} />
+              <input ref={fileInputRef} type="file" accept="image/*,.js,.jsx,.txt,.json" hidden onChange={handleFile} />
               <input value={input} onChange={e => setInput(e.target.value)} placeholder="Parle, écris, upload..." style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: 14.5, minWidth: 0 }} />
               <button type="button" onClick={startMic} style={{ width: 34, height: 34, borderRadius: '50%', background: isListening? '#FF3B30' : '#1E1E22', border: '1px solid #2A2A2E', color: '#fff', cursor: 'pointer' }}>{isListening? '●' : '🎤'}</button>
               <button type="button" onClick={doLaugh} style={{ width: 34, height: 34, borderRadius: '50%', background: '#1E1E22', border: '1px solid #2A2A2E', cursor: 'pointer' }}>😂</button>
@@ -195,9 +288,10 @@ export default function App() {
 
       {sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 40 }} />}
       <div style={{ position: 'fixed', top: 0, bottom: 0, left: sidebarOpen? 0 : -320, width: 300, background: '#0D0D0F', borderRight: '1px solid #1C1C1F', zIndex: 50, transition: 'left 0.3s', padding: 20, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 24 }}><div style={{ width: 36, height: 36, borderRadius: 12, background: '#CCFF00', display: 'grid', placeItems: 'center', color: '#000', fontWeight: 900 }}>A</div><div><div style={{ fontWeight: 800 }}>Ali OS</div><div style={{ fontSize: 11, color: '#666', fontWeight: 700 }}>V9 FIXED - WORKER READY</div></div></div>
-        <button onClick={() => { setMessages([{ role: 'assistant', content: "**Nouvelle discussion.**", timestamp: Date.now() }]); setSidebarOpen(false); }} style={{ background: '#CCFF00', color: '#000', border: 'none', height: 46, borderRadius: 14, fontWeight: 800, cursor: 'pointer' }}>+ Nouveau</button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 24 }}><div style={{ width: 36, height: 36, borderRadius: 12, background: '#CCFF00', display: 'grid', placeItems: 'center', color: '#000', fontWeight: 900 }}>A</div><div><div style={{ fontWeight: 800 }}>Ali OS</div><div style={{ fontSize: 11, color: '#666', fontWeight: 700 }}>V10 DOWNLOADABLE</div></div></div>
+        <button onClick={() => { setMessages([{ role: 'assistant', content: "**Nouvelle discussion.**", timestamp: Date.now() }]); setSidebarOpen(false); setVisionImage(null); }} style={{ background: '#CCFF00', color: '#000', border: 'none', height: 46, borderRadius: 14, fontWeight: 800, cursor: 'pointer' }}>+ Nouveau</button>
+        {visionImage && <div style={{ marginTop: 16 }}><div style={{ fontSize: 11, color:'#666', marginBottom:6 }}>Vision active 👁️</div><img src={visionImage} style={{ width:'100%', borderRadius:12, border:'1px solid #222' }} /><button onClick={()=>downloadFile(visionImage, `vision-${Date.now()}.jpg`)} style={{ marginTop:8, width:'100%', background:'#CCFF00', color:'#000', border:'none', borderRadius:10, padding:'8px', fontSize:11, fontWeight:800, cursor:'pointer' }}>⬇️ Télécharger image</button><button onClick={()=>setVisionImage(null)} style={{ marginTop:8, width:'100%', background:'#1A1A1E', border:'1px solid #222', color:'#fff', borderRadius:10, padding:'6px', fontSize:11 }}>Effacer</button></div>}
       </div>
     </div>
   );
-}
+    }
