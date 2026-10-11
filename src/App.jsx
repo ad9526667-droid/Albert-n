@@ -8,13 +8,7 @@ db.version(1).stores({
   projects: '++id, chatId, files'
 });
 
-const SYSTEM_INSTRUCTION = `
-Tu es Ali Super Agent OS, fusion de: Claude (écriture gras premium) + Replit Agent (terminal, multi-fichiers, build autonome) + Lovable (design ultra soigné) + Gemini (raisonnement long, multimodal).
-RÈGLES:
-1. Si on te demande de coder, réponds en JSON: {"thought":"plan détaillé", "files":[{"path":"src/App.jsx","content":"..."}], "commands":["npm i framer-motion", "npm run build"]}
-2. Tu peux créer 10+ fichiers. Design premium glass + neon lime.
-3. Si question simple, réponds comme Claude: gras, clair, structuré avec titres.
-`;
+const SYSTEM_INSTRUCTION = `Tu es Ali OS - Agent Replit. Si CODE: JSON {"files":[{"path":"src/App.jsx","content":"..."}]}. Si QUESTION: français court gras sans JSON.`;
 
 export default function App() {
   const [conversations, setConversations] = useState([]);
@@ -23,146 +17,177 @@ export default function App() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [activeView, setActiveView] = useState('chat');
-  const [projectFiles, setProjectFiles] = useState([{ path: 'src/App.jsx', content: 'export default function App(){return <div style={{padding:40, background:"#000", color:"#fff", height:"100vh", fontFamily:"serif"}}><h1 style={{fontWeight:900, fontSize:32}}>Ali Super Agent prêt</h1><p>Décris ton app, je code tout.</p></div>}' }]);
+  const [projectFiles, setProjectFiles] = useState([{ path: 'src/App.jsx', content: `export default function App(){ return <div className="min-h-screen bg-black text-white grid place-items-center"><h1 className="text-4xl font-black">Ali OS prêt</h1></div> }` }]);
   const [activeFile, setActiveFile] = useState('src/App.jsx');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [terminalLogs, setTerminalLogs] = useState(['> Ali OS v2.0 booted', '> Ready. Type help for commands', '> Agent: Claude + Replit + Lovable + Gemini fused']);
+  const [terminalLogs, setTerminalLogs] = useState(['> Ali OS v7 [Edge TTS + Laugh]', '> Microsoft Neural Voice loaded']);
+  const [isListening, setIsListening] = useState(false);
+  const [voices, setVoices] = useState([]);
+  const [selectedVoice, setSelectedVoice] = useState(null);
+  const [ttsOn, setTtsOn] = useState(true);
   const chatEndRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // === EDGE TTS VOICES ===
+  useEffect(()=>{
+    const loadVoices = () => {
+      const vs = window.speechSynthesis.getVoices();
+      const msVoices = vs.filter(v=> v.name.toLowerCase().includes('microsoft') || v.name.includes('Aria') || v.name.includes('Jenny') || v.lang.startsWith('fr'));
+      setVoices(vs);
+      const preferred = vs.find(v=> v.name.includes('Microsoft Denise') || v.name.includes('Microsoft Aria') || v.name.includes('Jenny') || v.lang==='fr-FR') || vs[0];
+      setSelectedVoice(preferred);
+    };
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+  },[]);
+
+  const speak = (text, withLaugh=false) => {
+    if(!ttsOn) return;
+    window.speechSynthesis.cancel();
+    let clean = text.replace(/\*\*/g,'').replace(/!\[.*\]\(.*\)/g,'').replace(/```[\s\S]*?```/g,'').slice(0,400);
+    if(withLaugh){
+      clean = clean + " Hahaha!";
+    }
+    const utter = new SpeechSynthesisUtterance(clean);
+    if(selectedVoice) utter.voice = selectedVoice;
+    utter.rate = withLaugh? 1.1 : 0.95;
+    utter.pitch = withLaugh? 1.3 : 1.0;
+    utter.volume = 1;
+    window.speechSynthesis.speak(utter);
+  };
+
+  const laugh = () => {
+    const laughs = ["Ahahaha! C'est trop drôle!", "Hahaha! J'adore!", "Hihi! Tu m'as fait rire!", "Ahah! Excellent!"];
+    const pick = laughs[Math.floor(Math.random()*laughs.length)];
+    speak(pick, true);
+    setTerminalLogs(l=> [...l, `> Ali laughs: ${pick}`]);
+  };
 
   useEffect(() => {
-    async function init() {
+    (async()=>{
       let chats = await db.conversations.toArray();
-      if (chats.length === 0) {
-        const id = await db.conversations.add({ title: 'Nouvelle app', updatedAt: Date.now() });
-        chats = [{ id, title: 'Nouvelle app', updatedAt: Date.now() }];
-        await db.messages.add({ chatId: id, role: 'assistant', content: "**Je suis Ali Super Agent OS.**\n\nFusion de **Claude** pour l'écriture, **Replit** pour le terminal & l'autonomie, **Lovable** pour le design, et **Gemini** pour le raisonnement.\n\nDécris ton app et je te build le projet complet avec terminal, fichiers, et preview live.", timestamp: Date.now() });
+      if(chats.length===0){
+        const id = await db.conversations.add({title:'Nouvelle app', updatedAt:Date.now()});
+        chats=[{id, title:'Nouvelle app', updatedAt:Date.now()}];
+        await db.messages.add({chatId:id, role:'assistant', content:"**Je suis Ali OS avec voix Edge.**\n\nJe parle **toutes les langues** et je sais **rire comme un humain**. Teste le bouton 🔊 ou 😂", timestamp:Date.now()});
       }
       setConversations(chats.sort((a,b)=>b.updatedAt-a.updatedAt));
       setCurrentChatId(chats[0].id);
       setMessages(await db.messages.where('chatId').equals(chats[0].id).sortBy('timestamp'));
-      const proj = await db.projects.where('chatId').equals(chats[0].id).toArray();
-      if(proj[0]?.files) setProjectFiles(proj[0].files);
-    }
-    init();
+    })();
   }, []);
-  useEffect(() => { chatEndRef.current?.scrollIntoView({behavior:'smooth'}); }, [messages, terminalLogs]);
+  useEffect(()=>{ chatEndRef.current?.scrollIntoView({behavior:'smooth'}) }, [messages]);
+
+  const startMic = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if(!SR) return alert("Micro non supporté");
+    const rec = new SR(); rec.lang='fr-FR'; rec.onstart=()=>setIsListening(true);
+    rec.onend=()=>setIsListening(false);
+    rec.onresult=(e)=> setInput(e.results[0][0].transcript);
+    rec.start();
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0]; if(!file) return;
+    const text = await file.text();
+    setProjectFiles(prev=> [...prev, {path:`src/${file.name}`, content:text}]);
+    setTerminalLogs(l=> [...l, `> uploaded ${file.name}`]);
+  };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    if(!input.trim() || loading) return;
-    const userPrompt = input.trim();
-    setInput('');
-    const userMsg = { chatId: currentChatId, role: 'user', content: userPrompt, timestamp: Date.now() };
-    setMessages(p=>[...p, userMsg]);
-    await db.messages.add(userMsg);
+    e.preventDefault(); if(!input.trim()||loading) return;
+    const prompt = input.trim(); setInput('');
+    const um = {chatId:currentChatId, role:'user', content:prompt, timestamp:Date.now()};
+    setMessages(m=>[...m,um]); await db.messages.add(um);
     setLoading(true);
-    setTerminalLogs(l=> [...l, `> user@ali: ${userPrompt}`, `> ali@agent: thinking...`]);
 
-    try {
-      const fullPrompt = `${SYSTEM_INSTRUCTION}\n\nPROJET: ${JSON.stringify(projectFiles.map(f=>f.path))}\n\nDEMANDE: ${userPrompt}`;
-      const res = await fetch(`https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}?model=openai`);
-      const text = await res.text();
-      let parsedFiles = null; let commands = [];
-      try {
-        const jsonMatch = text.match(/\{[\s\S]*"files"[\s\S]*\}/);
-        if(jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
-          if(parsed.files) parsedFiles = parsed.files;
-          if(parsed.commands) commands = parsed.commands;
-        }
-      } catch {}
-      if(parsedFiles) {
-        setProjectFiles(parsedFiles);
-        setActiveFile(parsedFiles[0].path);
-        await db.projects.where('chatId').equals(currentChatId).delete();
-        await db.projects.add({ chatId: currentChatId, files: parsedFiles });
-        setTerminalLogs(l=> [...l, `> generated ${parsedFiles.length} files`,...commands.map(c=>`> $ ${c}`), `> build success ✓`, `> preview ready at /preview`]);
-        const assistantMsg = { chatId: currentChatId, role: 'assistant', content: `**✅ Projet généré: ${parsedFiles.length} fichiers.**\n\n${parsedFiles.map(f=>`**• ${f.path}**`).join('\n')}\n\n**J'ai aussi exécuté:**\n${commands.join('\n') || 'npm run dev'}\n\nPasse en **Preview** ou **Terminal**.`, timestamp: Date.now() };
-        setMessages(p=>[...p, assistantMsg]);
-        await db.messages.add(assistantMsg);
-        setActiveView('preview');
-      } else {
-        const assistantMsg = { chatId: currentChatId, role: 'assistant', content: text, timestamp: Date.now() };
-        setMessages(p=>[...p, assistantMsg]);
-        await db.messages.add(assistantMsg);
-        setTerminalLogs(l=> [...l, `> response: ${text.slice(0,80)}...`]);
+    try{
+      if(prompt.toLowerCase().match(/image|génère.*image|photo|chien/)){
+        const img = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&seed=${Date.now()}`;
+        const am = {chatId:currentChatId, role:'assistant', content:`**Image générée**\n\n![img](${img})`, timestamp:Date.now()};
+        setMessages(m=>[...m,am]); await db.messages.add(am);
+        speak("Voilà ton image, elle est magnifique!", false);
+        setLoading(false); return;
       }
-    } catch(err) {
-      setMessages(p=>[...p, { chatId: currentChatId, role: 'assistant', content: "**Erreur réseau.** Réessaie.", timestamp: Date.now() }]);
-      setTerminalLogs(l=> [...l, `> error: network`]);
-    } finally { setLoading(false); }
+      const fullPrompt = `${SYSTEM_INSTRUCTION}\nDemande: ${prompt}`;
+      const res = await fetch(`https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}?model=openai`);
+      let raw = await res.text();
+      raw = raw.replace(/"role".*?"reasoning"/gs,'');
+      let files = null;
+      try{
+        const jm = raw.match(/\{[\s\S]*?"files"\s*:\s*\[[\s\S]*?\]\s*\}/);
+        if(jm){
+          const parsed = JSON.parse(jm[0].replace(/```json|```/g,''));
+          if(parsed.files?.length) files = parsed.files;
+        }
+      }catch{}
+      if(files){
+        const safe = files.filter(f=> f.path && f.content &&!f.path.includes('..')).slice(0,20);
+        setProjectFiles(safe); setActiveFile(safe[0].path);
+        await db.projects.where('chatId').equals(currentChatId).delete();
+        await db.projects.add({chatId:currentChatId, files:safe});
+        const am = {chatId:currentChatId, role:'assistant', content:`**✅ Projet buildé: ${safe.length} fichiers**`, timestamp:Date.now()};
+        setMessages(m=>[...m,am]); await db.messages.add(am);
+        setActiveView('preview');
+        speak(`Projet terminé! J'ai créé ${safe.length} fichiers. Regarde le preview!`, true);
+      }else{
+        const clean = raw.replace(/\{.*files.*\}/gs,'').slice(0,1500).trim();
+        const am = {chatId:currentChatId, role:'assistant', content: clean, timestamp:Date.now()};
+        setMessages(m=>[...m,am]); await db.messages.add(am);
+        speak(clean, false);
+      }
+    }catch{
+      setMessages(m=>[...m,{chatId:currentChatId, role:'assistant', content:"**Erreur réseau.**", timestamp:Date.now()}]);
+    }finally{ setLoading(false); }
   };
 
-  const activeFileContent = projectFiles.find(f=>f.path===activeFile)?.content || '';
-  const previewSrcDoc = `<!DOCTYPE html><html><head><script src="https://cdn.tailwindcss.com"></script><script src="https://unpkg.com/react@18/umd/react.development.js"><\/script><script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script><script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script></head><body><div id="root"></div><script type="text/babel">${projectFiles.map(f=>f.content).join('\n\n')}\nconst root=ReactDOM.createRoot(document.getElementById('root')); try{root.render(React.createElement(App))}catch(e){document.body.innerHTML='<pre style=color:red;padding:20px>'+e.message+'</pre>'}\<\/script></body></html>`;
-
-  const renderClaudeStyle = (text) => {
-    return text.split('\n').map((line, i)=>{
-      if(line.startsWith('**') && line.endsWith('**')) return <div key={i} style={{fontWeight:800, fontSize:16, margin:'8px 0', letterSpacing:-0.3}}>{line.replace(/\*\*/g,'')}</div>
-      const parts = line.split(/(\*\*.*?\*\*)/);
-      return <div key={i} style={{margin:'4px 0'}}>{parts.map((p,j)=> p.startsWith('**')? <b key={j} style={{fontWeight:750}}>{p.replace(/\*\*/g,'')}</b> : p)}</div>
-    })
-  };
+  const activeContent = projectFiles.find(f=>f.path===activeFile)?.content||'';
+  const previewDoc = `<!DOCTYPE html><html><head><script src="https://cdn.tailwindcss.com"><\/script><script src="https://unpkg.com/react@18/umd/react.development.js"><\/script><script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script><script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script></head><body><div id="root"></div><script type="text/babel">${projectFiles.map(f=>f.content).join('\n\n')}\nconst r=ReactDOM.createRoot(document.getElementById('root'));try{r.render(React.createElement(App))}catch(e){document.body.innerHTML='<pre>'+e.message+'</pre>'}\<\/script></body></html>`;
 
   return (
-    <div style={{ display: 'flex', height: '100dvh', background: '#08080A', color: '#F1F1F2', fontFamily: 'Inter, system-ui', overflow: 'hidden' }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap'); *{box-sizing:border-box} ::-webkit-scrollbar{display:none}`}</style>
+    <div style={{height:'100dvh', background:'#08080A', color:'#F1F1F2', display:'flex', flexDirection:'column', overflow:'hidden'}}>
+      <style>{`*{box-sizing:border-box} ::-webkit-scrollbar{display:none}`}</style>
 
-      {sidebarOpen && <div onClick={()=>setSidebarOpen(false)} style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:40}}/>}
-      <div style={{ width:300, background:'#0D0D0F', borderRight:'1px solid #1C1C1F', position:'fixed', top:0, bottom:0, left: sidebarOpen?0:-320, zIndex:50, transition:'left 0.35s cubic-bezier(0.16,1,0.3,1)', padding:20, display:'flex', flexDirection:'column' }}>
-        <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:28}}><div style={{width:36,height:36,borderRadius:12,background:'#CCFF00',display:'grid',placeItems:'center',color:'#000',fontWeight:900,fontSize:18}}>A</div><div><div style={{fontWeight:800,fontSize:15,letterSpacing:-0.4}}>Ali OS</div><div style={{fontSize:11,color:'#71717A',fontWeight:600}}>CLAUDE + REPLIT + GEMINI</div></div></div>
-        <button onClick={async()=>{ const id=await db.conversations.add({title:'Nouvelle app', updatedAt:Date.now()}); setConversations([{id, title:'Nouvelle app', updatedAt:Date.now()},...conversations]); setCurrentChatId(id); setMessages([]); setSidebarOpen(false); }} style={{background:'#CCFF00', color:'#000', border:'none', height:46, borderRadius:14, fontWeight:800, cursor:'pointer'}}>+ Nouvelle App</button>
-        <div style={{marginTop:20, flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:6}}>{conversations.map(c=> <div key={c.id} onClick={async()=>{ setCurrentChatId(c.id); setMessages(await db.messages.where('chatId').equals(c.id).sortBy('timestamp')); setSidebarOpen(false);}} style={{padding:'11px 12px', borderRadius:12, background: currentChatId===c.id?'#17171A':'transparent', border: currentChatId===c.id?'1px solid #252529':'1px solid transparent', cursor:'pointer', fontSize:13, fontWeight: currentChatId===c.id?700:500}}>{c.title}</div>)}</div>
-      </div>
+      <header style={{height:62, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 12px', borderBottom:'1px solid #1A1A1E'}}>
+        <div style={{display:'flex', gap:10, alignItems:'center'}}><button onClick={()=>setSidebarOpen(true)} style={{width:36,height:36, borderRadius:10, background:'#141416', border:'1px solid #222', color:'#fff'}}>☰</button><b>Ali</b><span style={{fontSize:10, background:'#CCFF00', color:'#000', padding:'3px 8px', borderRadius:99, fontWeight:800}}>EDGE TTS</span></div>
+        <div style={{display:'flex', gap:6, alignItems:'center'}}>
+          <select value={selectedVoice?.name||''} onChange={e=> setSelectedVoice(voices.find(v=>v.name===e.target.value))} style={{background:'#111', color:'#fff', border:'1px solid #222', borderRadius:99, padding:'4px 8px', fontSize:11, maxWidth:110}}>
+            {voices.slice(0,20).map(v=> <option key={v.name} value={v.name}>{v.name.slice(0,20)} ({v.lang})</option>)}
+          </select>
+          <button onClick={()=>setTtsOn(!ttsOn)} style={{width:32,height:32, borderRadius:99, background: ttsOn?'#CCFF00':'#1E1E22', color: ttsOn?'#000':'#666', border:'none', cursor:'pointer'}}>🔊</button>
+          <button onClick={laugh} style={{width:32,height:32, borderRadius:99, background:'#1E1E22', border:'1px solid #333', cursor:'pointer'}}>😂</button>
+        </div>
+      </header>
 
-      <div style={{ flex:1, display:'flex', flexDirection:'column', minWidth:0 }}>
-        <header style={{ height:62, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 14px', background:'#08080A', borderBottom:'1px solid #1A1A1E', flexShrink:0 }}>
-          <div style={{display:'flex', alignItems:'center', gap:12}}><button onClick={()=>setSidebarOpen(true)} style={{width:38,height:38, borderRadius:12, background:'#141416', border:'1px solid #222', color:'#fff', cursor:'pointer'}}>☰</button><span style={{fontWeight:850, letterSpacing:-0.5}}>Ali</span><span style={{fontSize:10, fontWeight:800, background:'#CCFF00', color:'#000', padding:'3px 8px', borderRadius:99}}>SUPER AGENT</span></div>
-          <div style={{display:'flex', background:'#111114', borderRadius:999, padding:4, border:'1px solid #1E1E22'}}>{[{id:'chat',l:'Chat'},{id:'files',l:'Files'},{id:'terminal',l:'Terminal'},{id:'preview',l:'Preview'}].map(t=> <button key={t.id} onClick={()=>setActiveView(t.id)} style={{background: activeView===t.id?'#1E1E22':'transparent', color: activeView===t.id?'#fff':'#71717A', border:'none', padding:'7px 12px', borderRadius:999, fontSize:12, fontWeight:700, cursor:'pointer'}}>{t.l}</button>)}</div>
-        </header>
-
-        <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
-          {activeView==='chat' && (
-            <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-              <div style={{ flex:1, overflowY:'auto', padding:'24px 0' }}>
-                <div style={{ maxWidth:740, width:'100%', margin:'0 auto', padding:'0 20px', display:'flex', flexDirection:'column', gap:32 }}>
-                  {messages.map((m,i)=>(
-                    <div key={i} style={{ display:'flex', flexDirection:'column', alignItems: m.role==='user'?'flex-end':'flex-start' }}>
-                      {m.role==='user'? <div style={{ maxWidth:'80%', background:'#1A1A1E', border:'1px solid #242428', padding:'14px 20px', borderRadius:'22px 22px 6px 22px', fontSize:15, fontWeight:500 }}>{m.content}</div> : <div style={{ width:'100%', fontSize:15.5, lineHeight:1.7, color:'#E8E8E9', fontWeight:500 }}>{renderClaudeStyle(m.content)}</div>}
-                    </div>
-                  ))}
-                  {loading && <div style={{color:'#CCFF00', fontSize:13, fontWeight:700, display:'flex', gap:10, alignItems:'center'}}><div style={{width:18,height:18,border:'2px solid #222',borderTopColor:'#CCFF00',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/>Ali pense comme Claude, code comme Replit...</div>}
-                  <div ref={chatEndRef}/>
+      <div style={{flex:1, display:'flex', overflow:'hidden'}}>
+        <div style={{flex:1, display:'flex', flexDirection:'column'}}>
+          <div style={{flex:1, overflowY:'auto', padding:'20px 0'}}>
+            <div style={{maxWidth:720, margin:'0 auto', padding:'0 14px', display:'flex', flexDirection:'column', gap:20}}>
+              {messages.map((m,i)=>(
+                <div key={i} style={{alignSelf: m.role==='user'?'flex-end':'flex-start', maxWidth: m.role==='user'?'80%':'100%', display:'flex', gap:8, alignItems:'flex-end'}}>
+                  <div style={{background: m.role==='user'?'#1A1A1E':'transparent', border: m.role==='user'?'1px solid #242428':'none', padding: m.role==='user'?'12px 16px':'0', borderRadius:'18px 18px 6px 18px', fontSize:14.5}}>{m.content.includes('![')? <img src={m.content.match(/!\[.*\]\((.*)\)/)?.[1]} style={{maxWidth:320, borderRadius:16, marginTop:8}}/> : m.content.replace(/\*\*/g,'')}</div>
+                  {m.role==='assistant' && <><button onClick={()=>speak(m.content)} style={{width:28,height:28,borderRadius:99,background:'#1A1A1E',border:'1px solid #222',cursor:'pointer',fontSize:12}}>🔊</button><button onClick={laugh} style={{width:28,height:28,borderRadius:99,background:'#1A1A1E',border:'1px solid #222',cursor:'pointer',fontSize:12}}>😂</button></>}
                 </div>
-              </div>
-              <div style={{ padding:'12px 16px 18px', flexShrink:0 }}>
-                <div style={{maxWidth:740, margin:'0 auto'}}>
-                  <form onSubmit={handleSubmit} style={{display:'flex', alignItems:'center', gap:10, background:'#131316', borderRadius:28, padding:'6px 6px 6px 20px', border:'1px solid #252529'}}>
-                    <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Demande à Ali: SaaS, clone, dashboard..." style={{flex:1, background:'transparent', border:'none', color:'#fff', outline:'none', fontSize:15, fontWeight:500, minWidth:0}}/>
-                    <button disabled={loading ||!input.trim()} style={{background: input.trim()?'#CCFF00':'#1E1E22', color: input.trim()?'#000':'#555', border:'none', width:42, height:42, borderRadius:'50%', cursor:'pointer', fontWeight:900}}>↑</button>
-                  </form>
-                </div>
-              </div>
+              ))}
+              <div ref={chatEndRef}/>
             </div>
-          )}
-          {activeView==='files' && (
-            <div style={{ flex:1, display:'flex', background:'#09090B' }}>
-              <div style={{width:210, borderRight:'1px solid #1A1A1E', background:'#0C0C0E', padding:10, overflowY:'auto'}}>{projectFiles.map(f=> <div key={f.path} onClick={()=>setActiveFile(f.path)} style={{padding:'9px 10px', borderRadius:10, background: activeFile===f.path?'#1A1A1E':'transparent', color: activeFile===f.path?'#CCFF00':'#71717A', cursor:'pointer', fontSize:11.5, fontFamily:'JetBrains Mono', marginBottom:4}}>{f.path}</div>)}</div>
-              <textarea value={activeFileContent} onChange={e=>{ setProjectFiles(prev=> prev.map(p=> p.path===activeFile? {...p, content: e.target.value}: p)); }} style={{flex:1, background:'#08080A', color:'#E4E4E7', border:'none', padding:16, fontFamily:'JetBrains Mono', fontSize:12.5, outline:'none', resize:'none'}} spellCheck={false}/>
+          </div>
+
+          <div style={{padding:12}}>
+            <div style={{maxWidth:720, margin:'0 auto'}}>
+              <form onSubmit={handleSubmit} style={{display:'flex', gap:8, background:'#131316', borderRadius:28, padding:'6px 8px 6px 12px', border:'1px solid #252529', alignItems:'center'}}>
+                <button type="button" onClick={()=>fileInputRef.current.click()} style={{width:36,height:36,borderRadius:'50%',background:'#1E1E22',border:'1px solid #2A2A2E',color:'#fff',cursor:'pointer'}}>📎</button>
+                <input ref={fileInputRef} type="file" hidden onChange={handleFileUpload}/>
+                <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Parle, écris, upload..." style={{flex:1, background:'transparent', border:'none', outline:'none', color:'#fff', fontSize:14.5}}/>
+                <button type="button" onClick={startMic} style={{width:36,height:36,borderRadius:'50%',background: isListening?'#FF3B30':'#1E1E22',border:'1px solid #2A2A2E',color:'#fff',cursor:'pointer'}}>{isListening?'●':'🎤'}</button>
+                <button type="button" onClick={laugh} style={{width:36,height:36,borderRadius:'50%',background:'#1E1E22',border:'1px solid #2A2A2E',cursor:'pointer'}}>😂</button>
+                <button disabled={loading||!input.trim()} style={{width:40,height:40,borderRadius:'50%',background: input.trim()?'#CCFF00':'#1E1E22',color:'#000',border:'none',fontWeight:900}}>↑</button>
+              </form>
+              <div style={{display:'flex', justifyContent:'center', gap:12, marginTop:6}}><span style={{fontSize:10,color:'#555'}}>🎤 Micro</span><span style={{fontSize:10,color:'#555'}}>📎 Upload</span><span style={{fontSize:10,color:'#555'}}>🔊 Edge TTS 140 langues</span><span style={{fontSize:10,color:'#555'}}>😂 Rire humain</span></div>
             </div>
-          )}
-          {activeView==='terminal' && (
-            <div style={{flex:1, background:'#050507', padding:16, fontFamily:'JetBrains Mono', fontSize:12.5, overflowY:'auto', color:'#CCFF00'}}>
-              <div style={{display:'flex', flexDirection:'column', gap:6}}>
-                {terminalLogs.map((log,i)=> <div key={i} style={{color: log.startsWith('> $')?'#fff': log.startsWith('> error')?'#ff4d4d':'#CCFF00'}}>{log}</div>)}
-                <div style={{display:'flex', alignItems:'center', gap:8, marginTop:12}}><span style={{color:'#fff'}}>$</span><input placeholder="npm install, ls, build..." style={{flex:1, background:'transparent', border:'none', outline:'none', color:'#fff', fontFamily:'JetBrains Mono'}} onKeyDown={e=>{ if(e.key==='Enter'){ setTerminalLogs(l=> [...l, `> $ ${e.currentTarget.value}`, `> executed: ${e.currentTarget.value}`]); e.currentTarget.value=''; }}} /></div>
-              </div>
-            </div>
-          )}
-          {activeView==='preview' && <iframe title="preview" srcDoc={previewSrcDoc} style={{flex:1, border:'none', background:'#fff'}}/>}
+          </div>
         </div>
       </div>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
-            }
+      }
