@@ -1,12 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Dexie from 'dexie';
 
-const db = new Dexie('AliAgentDB');
+const db = new Dexie('AliMobileNeonDB');
 db.version(1).stores({
   conversations: '++id, title, updatedAt',
   messages: '++id, chatId, role, content, timestamp',
-  files: '++id, chatId, path, content'
+  projects: '++id, chatId, files'
 });
+
+const SYSTEM = `Tu es Ali Super Agent, agent mobile le plus puissant que Lovable/Bolt/Replit.
+Si on te demande de coder, réponds UNIQUEMENT en JSON: {"thought":"plan", "files":[{"path":"src/App.jsx","content":"..."}]}
+Sinon réponds normalement. Design ultra premium mobile, Tailwind, glass, neon, animations.`;
 
 export default function App() {
   const [conversations, setConversations] = useState([]);
@@ -14,173 +18,142 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [activeView, setActiveView] = useState('chat');
-  const [files, setFiles] = useState([
-    { path: 'src/App.jsx', content: '// Code généré par Ali\n' }
-  ]);
+  const [view, setView] = useState('chat'); // chat | build | preview
+  const [files, setFiles] = useState([{ path: 'src/App.jsx', content: `export default function App(){return <div style={{height:'100vh',background:'#050507',color:'#fff',display:'grid',placeItems:'center',fontFamily:'system-ui'}}><div style={{textAlign:'center'}}><div style={{width:64,height:64,margin:'0 auto 16px',borderRadius:20,background:'linear-gradient(135deg,#00FFD1,#8B5CF6)',boxShadow:'0 0 40px rgba(0,255,209,0.5)'}}/><h1 style={{fontSize:24,fontWeight:700,letterSpacing:-0.5}}>Ali Mobile</h1><p style={{opacity:0.5,marginTop:8}}>Dis-moi quelle app tu veux créer</p></div></div>}` }]);
+  const [activeFile, setActiveFile] = useState('src/App.jsx');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const chatEndRef = useRef(null);
-  const [copiedIdx, setCopiedIdx] = useState(null);
+  const endRef = useRef(null);
+  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:'smooth'}) },[messages, loading]);
 
-  useEffect(() => {
-    async function initApp() {
+  useEffect(()=>{
+    (async()=>{
       let chats = await db.conversations.toArray();
-      if (chats.length === 0) {
-        const defaultChatId = await db.conversations.add({ title: 'Nouvelle discussion', updatedAt: Date.now() });
-        chats = [{ id: defaultChatId, title: 'Nouvelle discussion', updatedAt: Date.now() }];
-        await db.messages.add({
-          chatId: defaultChatId,
-          role: 'assistant',
-          content: "Salut! Comment ça va aujourd'hui? Tu as un nouveau projet de code en tête ou on discute de quoi?",
-          timestamp: Date.now()
-        });
+      if(!chats.length){
+        const id = await db.conversations.add({title:'Nouvelle app', updatedAt:Date.now()});
+        chats=[{id,title:'Nouvelle app',updatedAt:Date.now()}];
+        await db.messages.add({chatId:id, role:'assistant', content:"Yo, c'est Ali. Je suis ton agent mobile ultra puissant. Tu veux quoi comme app? Un SaaS? Un clone? Dis-moi et je te build tout le projet en néon, direct sur ton tel.", timestamp:Date.now()});
       }
-      setConversations(chats.sort((a,b) => b.updatedAt - a.updatedAt));
+      setConversations(chats.sort((a,b)=>b.updatedAt-a.updatedAt));
       setCurrentChatId(chats[0].id);
-      loadChatData(chats[0].id);
-    }
-    initApp();
-  }, []);
+      setMessages(await db.messages.where('chatId').equals(chats[0].id).sortBy('timestamp'));
+      const p = await db.projects.where('chatId').equals(chats[0].id).toArray();
+      if(p[0]?.files) setFiles(p[0].files);
+    })();
+  },[]);
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
-
-  const loadChatData = async (chatId) => {
-    const chatMessages = await db.messages.where('chatId').equals(chatId).sortBy('timestamp');
-    setMessages(chatMessages);
-  };
-
-  const handleSubmit = async (e) => {
+  const handleSend = async (e)=>{
     e.preventDefault();
-    if (!input.trim() || loading ||!currentChatId) return;
-    const userPrompt = input.trim();
-    setInput('');
-    const userMsg = { chatId: currentChatId, role: 'user', content: userPrompt, timestamp: Date.now() };
-    setMessages(prev => [...prev, userMsg]);
-    await db.messages.add(userMsg);
-    await db.conversations.update(currentChatId, { updatedAt: Date.now(), title: userPrompt.slice(0, 40) });
+    if(!input.trim()||loading) return;
+    const prompt = input.trim(); setInput('');
+    const u = {chatId:currentChatId, role:'user', content:prompt, timestamp:Date.now()};
+    setMessages(m=>[...m,u]); await db.messages.add(u);
     setLoading(true);
-
-    try {
-      const res = await fetch(`https://text.pollinations.ai/${encodeURIComponent(userPrompt)}?model=openai`);
-      const textResult = await res.text();
-      if (textResult.includes('```')) {
-        const match = textResult.match(/```(?:jsx?|tsx?|javascript)?\n([\s\S]*?)```/);
-        if (match && match[1]) setFiles([{ path: 'src/App.jsx', content: match[1] }]);
+    try{
+      const res = await fetch(`https://text.pollinations.ai/${encodeURIComponent(SYSTEM+"\n\nUSER: "+prompt)}?model=openai`);
+      const txt = await res.text();
+      let parsed = null;
+      try{ const j = txt.match(/\{[\s\S]*"files"[\s\S]*\}/); if(j) parsed = JSON.parse(j[0]); }catch{}
+      if(parsed?.files){
+        setFiles(parsed.files); setActiveFile(parsed.files[0].path);
+        await db.projects.where('chatId').equals(currentChatId).delete();
+        await db.projects.add({chatId:currentChatId, files:parsed.files});
+        const a = {chatId:currentChatId, role:'assistant', content:`Fait. ${parsed.files.length} fichiers générés. Regarde l'aperçu →`, timestamp:Date.now()};
+        setMessages(m=>[...m,a]); await db.messages.add(a);
+        setView('preview');
+      }else{
+        const a = {chatId:currentChatId, role:'assistant', content:txt, timestamp:Date.now()};
+        setMessages(m=>[...m,a]); await db.messages.add(a);
       }
-      const assistantMsg = { chatId: currentChatId, role: 'assistant', content: textResult, timestamp: Date.now() };
-      setMessages(prev => [...prev, assistantMsg]);
-      await db.messages.add(assistantMsg);
-    } catch (err) {
-      const errMsg = { chatId: currentChatId, role: 'assistant', content: "Connexion perdue. Réessaie.", timestamp: Date.now() };
-      setMessages(prev => [...prev, errMsg]);
-    } finally {
-      setLoading(false);
-    }
+    }finally{ setLoading(false); }
   };
 
-  const currentAppCode = files.find(f => f.path === 'src/App.jsx')?.content || '';
+  const previewDoc = `<!DOCTYPE html><html><head><script src="https://cdn.tailwindcss.com"></script><script src="https://unpkg.com/react@18/umd/react.development.js"><\/script><script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script><script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/></head><body style="margin:0;background:#050507"><div id="root"></div><script type="text/babel">${files.map(f=>`//${f.path}\n${f.content}`).join('\n\n')}\nconst root=ReactDOM.createRoot(document.getElementById('root')); try{root.render(React.createElement(App))}catch(e){document.body.innerHTML='<div style="padding:24px;color:#ff4d4d;font-family:monospace">'+e.message+'</div>'}<\/script></body></html>`;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#09090b', color: '#e3e3e3', fontFamily: '"Google Sans", system-ui, sans-serif', overflow: 'hidden' }}>
+    <div style={{height:'100vh', background:'#050507', color:'#fff', display:'flex', flexDirection:'column', fontFamily:'-apple-system,BlinkMacSystemFont,Inter,sans-serif', overflow:'hidden', position:'relative'}}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap'); *{font-family:Inter,sans-serif} ::-webkit-scrollbar{display:none}`}</style>
 
-      {sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 30, backdropFilter: 'blur(2px)' }}></div>}
-
-      <div style={{
-        width: '280px', backgroundColor: '#101010', borderRight: '1px solid #1f1f1f', display: 'flex', flexDirection: 'column', padding: '16px',
-        position: 'fixed', top: 0, bottom: 0, left: sidebarOpen? 0 : '-290px', transition: 'left 0.3s cubic-bezier(0.32,0.72,0,1)', zIndex: 40
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', padding: '4px' }}>
-          <span style={{ fontSize: '14px', fontWeight: '600' }}>Ali Agent</span>
-          <button onClick={() => setSidebarOpen(false)} style={{ background: '#232323', border: 'none', color: '#fff', width: '28px', height: '28px', borderRadius: '50%', cursor: 'pointer' }}>✕</button>
-        </div>
-        <button onClick={async () => {
-          const newId = await db.conversations.add({ title: 'Nouvelle discussion', updatedAt: Date.now() });
-          setConversations(prev => [{ id: newId, title: 'Nouvelle discussion', updatedAt: Date.now() },...prev]);
-          setCurrentChatId(newId);
-          setMessages([{ chatId: newId, role: 'assistant', content: "Salut! De quoi on parle?", timestamp: Date.now() }]);
-          setSidebarOpen(false);
-        }} style={{ backgroundColor: '#fff', color: '#000', border: 'none', padding: '12px', fontWeight: '600', borderRadius: '999px', cursor: 'pointer', marginBottom: '20px', fontSize: '13px' }}>
-          + Nouveau chat
-        </button>
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          {conversations.map(chat => (
-            <div key={chat.id} onClick={() => { setCurrentChatId(chat.id); loadChatData(chat.id); setActiveView('chat'); setSidebarOpen(false); }}
-              style={{ padding: '10px 12px', borderRadius: '12px', backgroundColor: currentChatId === chat.id? '#232324' : 'transparent', color: currentChatId === chat.id? '#fff' : '#a1a1aa', cursor: 'pointer', fontSize: '13.5px' }}>
-              {chat.title}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <header style={{ padding: '10px 14px', backgroundColor: '#09090b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #18181b' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <button onClick={() => setSidebarOpen(true)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '20px', cursor: 'pointer', width: '36px', height: '36px', display: 'grid', placeItems: 'center' }}>☰</button>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '16px', fontWeight: '500', color: '#fff', letterSpacing: '-0.2px' }}>Ali Agent</span>
-            <span style={{ fontSize: '11px', fontWeight: '500', background: '#1e1e20', color: '#a1a1aa', padding: '2px 6px', borderRadius: '6px', border: '1px solid #27272a' }}>Pro</span>
-            <span style={{ fontSize: '12px', color: '#71717a' }}>▼</span>
+      {/* HEADER ULTRA CLEAN MOBILE */}
+      <header style={{height:54, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 16px', background:'rgba(5,5,7,0.8)', backdropFilter:'blur(20px)', borderBottom:'1px solid rgba(255,255,255,0.06)', position:'sticky', top:0, zIndex:10}}>
+        <div style={{display:'flex', alignItems:'center', gap:10}}>
+          <button onClick={()=>setSidebarOpen(true)} style={{width:36,height:36, borderRadius:12, background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.08)', color:'#fff', display:'grid', placeItems:'center', cursor:'pointer'}}>≡</button>
+          <div style={{display:'flex', alignItems:'center', gap:8}}>
+            <div style={{width:28,height:28, borderRadius:9, background:'linear-gradient(135deg,#00FFD1 0%,#8B5CF6 100%)', boxShadow:'0 0 20px rgba(0,255,209,0.4)'}}/>
+            <span style={{fontWeight:700, fontSize:15, letterSpacing:-0.3}}>ali</span>
+            <span style={{fontSize:10, padding:'2px 6px', borderRadius:20, background:'rgba(0,255,209,0.1)', border:'1px solid rgba(0,255,209,0.2)', color:'#00FFD1', fontWeight:600}}>PRO</span>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <div style={{ background: '#18181b', borderRadius: '20px', padding: '3px', display: 'flex', gap: '2px', border: '1px solid #27272a' }}>
-            {['chat','code','preview'].map(v => (
-              <button key={v} onClick={() => setActiveView(v)} style={{ background: activeView === v? '#27272a' : 'transparent', color: activeView === v? '#fff' : '#71717a', border: 'none', padding: '6px 12px', borderRadius: '16px', fontSize: '12px', fontWeight: '500', cursor: 'pointer', textTransform: 'capitalize' }}>{v === 'chat'? 'Chat' : v === 'code'? 'Code' : 'Aperçu'}</button>
-            ))}
-          </div>
-        </div>
+        <div style={{width:32,height:32, borderRadius:'50%', background:'linear-gradient(135deg,#1a1a1f,#2a2a33)', border:'1px solid rgba(255,255,255,0.08)'}}/>
       </header>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {activeView === 'code'? (
-          <div style={{ padding: '16px', flex: 1, backgroundColor: '#09090b', display: 'flex', flexDirection: 'column' }}>
-            <textarea value={currentAppCode} onChange={(e) => setFiles([{ path: 'src/App.jsx', content: e.target.value }])}
-              style={{ flex: 1, backgroundColor: '#101010', color: '#e4e4e7', border: '1px solid #232323', borderRadius: '16px', padding: '16px', fontFamily: 'Geist Mono, monospace', fontSize: '13px', outline: 'none', resize: 'none' }}
-            />
-          </div>
-        ) : activeView === 'preview'? (
-          <iframe sandbox="allow-scripts" srcDoc={`<!DOCTYPE html><html><head><script src="https://unpkg.com/react@18/umd/react.development.js"><\/script><script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script><script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script></head><body style="margin:0;"><div id="root"></div><script type="text/babel">${currentAppCode}<\/script></body></html>`}
-            style={{ flex: 1, border: 'none', background: '#fff' }} />
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-            <div style={{ flex: 1, overflowY: 'auto', padding: '24px 16px', display: 'flex', flexDirection: 'column', gap: '28px' }}>
-              <div style={{ maxWidth: '720px', width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '28px' }}>
-                {messages.map((msg, idx) => (
-                  <div key={idx} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user'? 'flex-end' : 'flex-start', width: '100%' }}>
-                    {msg.role === 'user'? (
-                      <div style={{ backgroundColor: '#232324', padding: '14px 20px', borderRadius: '24px', color: '#f4f4f5', fontSize: '15px', lineHeight: '1.5', maxWidth: '85%' }}>{msg.content}</div>
-                    ) : (
-                      <div style={{ width: '100%' }}>
-                        <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.7', fontSize: '15px', color: '#e4e4e7' }}>{msg.content}</div>
-                        <div style={{ display: 'flex', gap: '16px', color: '#a1a1aa', marginTop: '16px', alignItems: 'center' }}>
-                          <button style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer', display: 'grid', placeItems: 'center' }} title="J'aime">👍</button>
-                          <button style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer' }}>👎</button>
-                          <button onClick={() => { navigator.clipboard.writeText(msg.content); setCopiedIdx(idx); setTimeout(()=>setCopiedIdx(null), 1500); }} style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer' }}>{copiedIdx === idx? '✓' : '⎙'}</button>
-                          <button style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer' }}>•••</button>
-                          <button onClick={() => { if ('speechSynthesis' in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(msg.content)); } }} style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer', marginLeft: 'auto' }}>🔊</button>
+      {/* SIDEBAR */}
+      {sidebarOpen && <div onClick={()=>setSidebarOpen(false)} style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', backdropFilter:'blur(4px)', zIndex:20}}/>}
+      <div style={{position:'fixed', top:0, bottom:0, left: sidebarOpen?0:-320, width:300, background:'#0a0a0f', borderRight:'1px solid rgba(255,255,255,0.06)', zIndex:30, transition:'all 0.4s cubic-bezier(0.16,1,0.3,1)', padding:20, display:'flex', flexDirection:'column'}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24}}><span style={{fontWeight:700}}>Projets</span><button onClick={()=>setSidebarOpen(false)} style={{width:28,height:28, borderRadius:'50%', background:'rgba(255,255,255,0.06)', border:'none', color:'#fff', cursor:'pointer'}}>✕</button></div>
+        <button onClick={async()=>{const id=await db.conversations.add({title:'Nouvelle app', updatedAt:Date.now()}); setConversations([{id,title:'Nouvelle app',updatedAt:Date.now()},...conversations]); setCurrentChatId(id); setMessages([]); setSidebarOpen(false);}} style={{height:44, borderRadius:14, background:'#fff', color:'#000', border:'none', fontWeight:600, cursor:'pointer', boxShadow:'0 0 20px rgba(255,255,255,0.2)'}}>+ Nouvelle App</button>
+        <div style={{marginTop:20, display:'flex', flexDirection:'column', gap:6, overflowY:'auto'}}>{conversations.map(c=> <div key={c.id} onClick={async()=>{ setCurrentChatId(c.id); setMessages(await db.messages.where('chatId').equals(c.id).sortBy('timestamp')); setSidebarOpen(false);}} style={{padding:'12px 14px', borderRadius:12, background: currentChatId===c.id?'rgba(255,255,255,0.08)':'transparent', cursor:'pointer', fontSize:13, border: currentChatId===c.id?'1px solid rgba(255,255,255,0.08)':'1px solid transparent'}}>{c.title}</div>)}</div>
+      </div>
+
+      {/* MAIN */}
+      <div style={{flex:1, display:'flex', flexDirection:'column', overflow:'hidden'}}>
+        {view==='chat' && (
+          <>
+            <div style={{flex:1, overflowY:'auto', padding:'20px 16px'}}>
+              <div style={{maxWidth:640, margin:'0 auto', display:'flex', flexDirection:'column', gap:20}}>
+                {messages.map((m,i)=>(
+                  <div key={i} style={{display:'flex', flexDirection:'column', alignItems: m.role==='user'?'flex-end':'flex-start'}}>
+                    {m.role==='user'? (
+                      <div style={{background:'linear-gradient(135deg,#1e1e22,#232326)', border:'1px solid rgba(255,255,255,0.06)', padding:'12px 18px', borderRadius:'20px 20px 6px 20px', fontSize:14.5, lineHeight:1.5, maxWidth:'88%', boxShadow:'0 4px 20px rgba(0,0,0,0.3)'}}>{m.content}</div>
+                    ):(
+                      <div style={{width:'100%'}}>
+                        <div style={{fontSize:14.5, lineHeight:1.7, color:'#d4d4d8', whiteSpace:'pre-wrap'}}>{m.content}</div>
+                        <div style={{display:'flex', gap:12, marginTop:12}}>
+                          <button onClick={()=>navigator.clipboard.writeText(m.content)} style={{width:28,height:28, borderRadius:8, background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.06)', color:'#71717a', cursor:'pointer', fontSize:12}}>⎙</button>
+                          <button style={{width:28,height:28, borderRadius:8, background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.06)', color:'#71717a', cursor:'pointer', fontSize:12}}>↗</button>
                         </div>
                       </div>
                     )}
                   </div>
                 ))}
-                {loading && <div style={{ color: '#71717a', fontSize: '14px' }}><span style={{ display: 'inline-block', width: '6px', height: '6px', background: '#fff', borderRadius: '50%', marginRight: '6px', animation: 'pulse 1s infinite' }}></span> Ali réfléchit...</div>}
-                <div ref={chatEndRef} />
+                {loading && <div style={{display:'flex', gap:8, alignItems:'center', color:'#00FFD1', fontSize:13}}><div style={{width:20,height:20, border:'2px solid rgba(0,255,209,0.2)', borderTopColor:'#00FFD1', borderRadius:'50%', animation:'spin 0.8s linear infinite'}}/> <span>Ali build en cours...</span></div>}
+                <div ref={endRef}/>
               </div>
             </div>
-
-            <div style={{ padding: '12px 16px 20px', background: 'linear-gradient(to top, #09090b 70%, transparent)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
-              <div style={{ fontSize: '11px', color: '#52525b' }}>Ali Agent peut se tromper. Vérifiez les informations importantes.</div>
-              <form onSubmit={handleSubmit} style={{ display: 'flex', alignItems: 'center', gap: '10px', backgroundColor: '#1e1e20', borderRadius: '32px', padding: '6px 8px 6px 16px', maxWidth: '720px', width: '100%', border: '1px solid #2a2a2e', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
-                <span style={{ color: '#a1a1aa', fontSize: '22px', cursor: 'pointer' }}>+</span>
-                <input type="text" value={input} onChange={e => setInput(e.target.value)} placeholder="Demandez à Ali..." style={{ flex: 1, backgroundColor: 'transparent', border: 'none', color: 'white', outline: 'none', fontSize: '15px' }} />
-                <button type="button" style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer', width: '36px', height: '36px', display: 'grid', placeItems: 'center' }}>🎤</button>
-                <button type="submit" disabled={loading ||!input.trim()} style={{ backgroundColor: input.trim()? '#fff' : '#3f3f46', color: '#000', border: 'none', width: '40px', height: '40px', borderRadius: '50%', fontWeight: 'bold', cursor: 'pointer', display: 'grid', placeItems: 'center', transition: 'all 0.2s' }}>
-                  {loading? '·' : '↑'}
-                </button>
-              </form>
+            <div style={{padding:'0 16px 24px', background:'linear-gradient(to top, #050507 60%, transparent)'}}>
+              <div style={{maxWidth:640, margin:'0 auto'}}>
+                <div style={{fontSize:10, color:'rgba(255,255,255,0.3)', textAlign:'center', marginBottom:10, letterSpacing:0.5}}>ALIMOBILE NEON • PLUS PUISSANT QUE BOLT • LOVABLE • REPLIT</div>
+                <form onSubmit={handleSend} style={{display:'flex', alignItems:'center', gap:8, background:'rgba(20,20,25,0.9)', border:'1px solid rgba(255,255,255,0.08)', backdropFilter:'blur(20px)', borderRadius:28, padding:'6px 6px 6px 18px', boxShadow:'0 0 0 1px rgba(255,255,255,0.03), 0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(139,92,246,0.1)'}}>
+                  <span style={{color:'rgba(255,255,255,0.3)', fontSize:20}}>+</span>
+                  <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Décris ton app..." style={{flex:1, background:'transparent', border:'none', outline:'none', color:'#fff', fontSize:15}}/>
+                  <button type="submit" disabled={!input.trim()||loading} style={{width:42,height:42, borderRadius:'50%', background: input.trim()?'linear-gradient(135deg,#00FFD1,#8B5CF6)':'rgba(255,255,255,0.08)', color: input.trim()?'#000':'#71717a', border:'none', cursor:'pointer', fontWeight:700, boxShadow: input.trim()?'0 0 20px rgba(0,255,209,0.5)':'none', transition:'all 0.2s'}}>↑</button>
+                </form>
+              </div>
             </div>
+          </>
+        )}
+        {view==='build' && (
+          <div style={{flex:1, display:'flex', background:'#08080a'}}>
+            <div style={{width:180, borderRight:'1px solid rgba(255,255,255,0.06)', padding:10, overflowY:'auto'}}>{files.map(f=> <div key={f.path} onClick={()=>setActiveFile(f.path)} style={{padding:'10px 12px', borderRadius:10, background: activeFile===f.path?'rgba(0,255,209,0.08)':'transparent', border: activeFile===f.path?'1px solid rgba(0,255,209,0.15)':'1px solid transparent', color: activeFile===f.path?'#00FFD1':'#71717a', cursor:'pointer', fontSize:11, fontFamily:'monospace', marginBottom:4}}>{f.path}</div>)}</div>
+            <textarea value={files.find(f=>f.path===activeFile)?.content||''} onChange={e=> setFiles(p=> p.map(x=> x.path===activeFile? {...x, content:e.target.value}:x))} style={{flex:1, background:'#050507', color:'#d4d4d8', border:'none', padding:16, fontFamily:'Geist Mono, monospace', fontSize:12.5, outline:'none', resize:'none'}}/>
           </div>
         )}
+        {view==='preview' && <iframe srcDoc={previewDoc} style={{flex:1, border:'none', background:'#050507'}}/>}
       </div>
+
+      {/* BOTTOM TAB BAR VRAIE APP MOBILE */}
+      <nav style={{height:72, background:'rgba(10,10,15,0.9)', backdropFilter:'blur(24px)', borderTop:'1px solid rgba(255,255,255,0.06)', display:'flex', justifyContent:'space-around', alignItems:'center', padding:'0 8px 8px', position:'sticky', bottom:0}}>
+        {[
+          {id:'chat', icon:'◐', label:'Chat'},
+          {id:'build', icon:'◑', label:'Code'},
+          {id:'preview', icon:'◎', label:'Preview'},
+        ].map(tab=>(
+          <button key={tab.id} onClick={()=>setView(tab.id)} style={{flex:1, height:48, borderRadius:16, background: view===tab.id?'rgba(255,255,255,0.08)':'transparent', border: view===tab.id?'1px solid rgba(255,255,255,0.08)':'1px solid transparent', color: view===tab.id?'#fff':'#52525b', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:2, position:'relative'}}>
+            {view===tab.id && <div style={{position:'absolute', top:-1, left:'30%', right:'30%', height:2, background:'linear-gradient(90deg,#00FFD1,#8B5CF6)', borderRadius:2, boxShadow:'0 0 10px #00FFD1'}}/>}
+            <span style={{fontSize:18}}>{tab.icon}</span><span style={{fontSize:10, fontWeight:600}}>{tab.label}</span>
+          </button>
+        ))}
+      </nav>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
-}
+      }
